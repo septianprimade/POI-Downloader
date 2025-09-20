@@ -171,7 +171,7 @@ if st.session_state["pois_df"] is not None:
                 popup=row["name"] if row["name"] else kategori,
                 tooltip=row["name"] if row["name"] else kategori
             ).add_to(m)
-    st_folium(m, width=700, height=500)
+    st_folium(m, width=1000, height=700)
 
     # 3. Tombol download CSV
     csv = df.to_csv(index=False).encode("utf-8")
