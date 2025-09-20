@@ -163,7 +163,7 @@ if st.session_state["pois_df"] is not None:
 
     # 2. Peta
     st.subheader("🗺️ Peta POI")
-    m = folium.Map(location=[df["lat"].mean(), df["lon"].mean()], zoom_start=12)
+    m = folium.Map(location=[df["lat"].mean(), df["lon"].mean()], zoom_start=8)
     for _, row in df.iterrows():
         if pd.notna(row["lat"]) and pd.notna(row["lon"]):
             folium.Marker(
@@ -171,7 +171,7 @@ if st.session_state["pois_df"] is not None:
                 popup=row["name"] if row["name"] else kategori,
                 tooltip=row["name"] if row["name"] else kategori
             ).add_to(m)
-    st_folium(m, width=1000, height=700)
+    st_folium(m, width=1500, height=700)
 
     # 3. Tombol download CSV
     csv = df.to_csv(index=False).encode("utf-8")
