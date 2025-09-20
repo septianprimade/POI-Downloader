@@ -85,6 +85,14 @@ def get_districts(regency):
             dists.append(el.get("tags", {}).get("name"))
     return sorted(list(set(filter(None, dists))))
 
+# --- Inisialisasi session state untuk simpan hasil ---
+if "pois_df" not in st.session_state:
+    st.session_state["pois_df"] = None
+if "wilayah" not in st.session_state:
+    st.session_state["wilayah"] = None
+if "kategori" not in st.session_state:
+    st.session_state["kategori"] = None
+
 # Dropdown berjenjang
 provinsi = st.selectbox("Pilih Provinsi", [""] + get_provinces())
 kabupaten = ""
@@ -97,66 +105,74 @@ if kabupaten:
 
 kategori = st.selectbox("Kategori POI", kategori_list, index=0)
 
-if st.button("🔍 Cari & Unduh Data"):
+if st.button("🔍 Cari & Simpan Data"):
     wilayah = kecamatan if kecamatan else (kabupaten if kabupaten else provinsi)
     if not wilayah:
         st.error("⚠️ Silakan pilih minimal Provinsi atau lebih spesifik (Kabupaten/Kota/Kecamatan).")
-        st.stop()
+    else:
+        with st.spinner(f"Mengunduh data POI {kategori} di {wilayah}..."):
+            query = f"""
+            [out:json][timeout:60];
+            area["name"="{wilayah}"]->.searchArea;
+            (
+              node["amenity"="{kategori}"](area.searchArea);
+              way["amenity"="{kategori}"](area.searchArea);
+              relation["amenity"="{kategori}"](area.searchArea);
+            );
+            out center;
+            """
+            data = query_overpass(query)
 
-    with st.spinner(f"Mengunduh data POI {kategori} di {wilayah}..."):
-        query = f"""
-        [out:json][timeout:60];
-        area["name"="{wilayah}"]->.searchArea;
-        (
-          node["amenity"="{kategori}"](area.searchArea);
-          way["amenity"="{kategori}"](area.searchArea);
-          relation["amenity"="{kategori}"](area.searchArea);
-        );
-        out center;
-        """
-        data = query_overpass(query)
+            pois = []
+            if data:
+                for element in data.get('elements', []):
+                    lat = element.get('lat')
+                    lon = element.get('lon')
+                    if lat is None and "center" in element:
+                        lat = element["center"]["lat"]
+                        lon = element["center"]["lon"]
 
-        if data is None:
-            st.error("❌ Semua server Overpass gagal merespons. Coba ulangi nanti atau gunakan wilayah lebih kecil.")
-            st.stop()
+                    pois.append({
+                        "id": element['id'],
+                        "lat": lat,
+                        "lon": lon,
+                        "name": element.get('tags', {}).get('name', ''),
+                        "address": element.get('tags', {}).get('addr:full', ''),
+                        "kategori": kategori
+                    })
 
-        pois = []
-        for element in data.get('elements', []):
-            lat = element.get('lat')
-            lon = element.get('lon')
-            if lat is None and "center" in element:
-                lat = element["center"]["lat"]
-                lon = element["center"]["lon"]
+            if len(pois) == 0:
+                st.session_state["pois_df"] = None
+                st.warning("⚠️ Tidak ada data ditemukan untuk kategori & wilayah ini. Coba ganti input.")
+            else:
+                df = pd.DataFrame(pois)
+                st.session_state["pois_df"] = df
+                st.session_state["wilayah"] = wilayah
+                st.session_state["kategori"] = kategori
+                st.success(f"✅ Ditemukan {len(df)} POI di {wilayah}")
 
-            pois.append({
-                "id": element['id'],
-                "lat": lat,
-                "lon": lon,
-                "name": element.get('tags', {}).get('name', ''),
-                "address": element.get('tags', {}).get('addr:full', ''),
-                "kategori": kategori
-            })
+# --- Render hasil tersimpan ---
+if st.session_state["pois_df"] is not None:
+    df = st.session_state["pois_df"]
+    wilayah = st.session_state["wilayah"]
+    kategori = st.session_state["kategori"]
 
-        if len(pois) == 0:
-            st.warning("⚠️ Tidak ada data ditemukan untuk kategori & wilayah ini. Coba ganti input.")
-        else:
-            df = pd.DataFrame(pois)
-            st.success(f"✅ Ditemukan {len(df)} POI di {wilayah}")
+    # 1. Tabel
+    st.subheader("📊 Data POI")
+    st.dataframe(df)
 
-            # 1. Tabel
-            st.dataframe(df)
+    # 2. Peta
+    st.subheader("🗺️ Peta POI")
+    m = folium.Map(location=[df["lat"].mean(), df["lon"].mean()], zoom_start=12)
+    for _, row in df.iterrows():
+        if pd.notna(row["lat"]) and pd.notna(row["lon"]):
+            folium.Marker(
+                [row["lat"], row["lon"]],
+                popup=row["name"] if row["name"] else kategori,
+                tooltip=row["name"] if row["name"] else kategori
+            ).add_to(m)
+    st_folium(m, width=700, height=500)
 
-            # 2. Peta
-            m = folium.Map(location=[df["lat"].mean(), df["lon"].mean()], zoom_start=12)
-            for _, row in df.iterrows():
-                if pd.notna(row["lat"]) and pd.notna(row["lon"]):
-                    folium.Marker(
-                        [row["lat"], row["lon"]],
-                        popup=row["name"] if row["name"] else kategori,
-                        tooltip=row["name"] if row["name"] else kategori
-                    ).add_to(m)
-            st_folium(m, width=700, height=500)
-
-            # 3. Download CSV (lengkap dengan koordinat)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Download CSV", csv, "poi.csv", "text/csv")
+    # 3. Tombol download CSV
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV", csv, "poi.csv", "text/csv")
