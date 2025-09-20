@@ -5,7 +5,7 @@ import folium
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="POI Downloader", layout="wide")
-st.title("📍 POI Downloader dari OpenStreetMap (Gratis)")
+st.title("📍 POI Downloader dari OpenStreetMap (OSM) + BPS Wilayah")
 
 # Daftar kategori umum (amenity OSM)
 kategori_list = [
@@ -25,6 +25,7 @@ overpass_servers = [
 ]
 
 def query_overpass(query):
+    """Coba query ke beberapa server Overpass"""
     for server in overpass_servers:
         try:
             response = requests.get(server, params={'data': query}, timeout=60)
@@ -39,53 +40,37 @@ def query_overpass(query):
             st.warning(f"⚠️ Error akses {server}: {e}")
     return None
 
-# Ambil daftar provinsi dari OSM (admin_level=4)
+
+# ==============================
+# Wilayah dari API BPS
+# ==============================
+BPS_BASE = "https://sig.bps.go.id/rest-bridging"
+
 @st.cache_data
 def get_provinces():
-    query = """
-    [out:json][timeout:60];
-    area["admin_level"="2"]["name"="Indonesia"]->.indo;
-    relation(area.indo)["admin_level"="4"];
-    out;
-    """
-    data = query_overpass(query)
-    provs = []
-    if data:
-        for el in data.get("elements", []):
-            provs.append(el.get("tags", {}).get("name"))
-    return sorted(list(set(filter(None, provs))))
+    url = f"{BPS_BASE}/getwilayah?level=provinsi"
+    r = requests.get(url, timeout=60)
+    data = r.json()
+    return pd.DataFrame(data)
 
-# Ambil daftar kabupaten/kota berdasarkan provinsi
-def get_regencies(provinsi):
-    query = f"""
-    [out:json][timeout:60];
-    relation["admin_level"="4"]["name"="{provinsi}"]->.prov;
-    relation(area.prov)["admin_level"="6"];
-    out;
-    """
-    data = query_overpass(query)
-    regs = []
-    if data:
-        for el in data.get("elements", []):
-            regs.append(el.get("tags", {}).get("name"))
-    return sorted(list(set(filter(None, regs))))
+@st.cache_data
+def get_regencies(kode_prov):
+    url = f"{BPS_BASE}/getwilayah?level=kabupaten&kode_provinsi={kode_prov}"
+    r = requests.get(url, timeout=60)
+    data = r.json()
+    return pd.DataFrame(data)
 
-# Ambil daftar kecamatan berdasarkan kabupaten/kota
-def get_districts(regency):
-    query = f"""
-    [out:json][timeout:60];
-    relation["admin_level"="6"]["name"="{regency}"]->.reg;
-    relation(area.reg)["admin_level"="8"];
-    out;
-    """
-    data = query_overpass(query)
-    dists = []
-    if data:
-        for el in data.get("elements", []):
-            dists.append(el.get("tags", {}).get("name"))
-    return sorted(list(set(filter(None, dists))))
+@st.cache_data
+def get_districts(kode_kab):
+    url = f"{BPS_BASE}/getwilayah?level=kecamatan&kode_kabupaten={kode_kab}"
+    r = requests.get(url, timeout=60)
+    data = r.json()
+    return pd.DataFrame(data)
 
-# --- Inisialisasi session state untuk simpan hasil ---
+
+# ==============================
+# Session State untuk hasil
+# ==============================
 if "pois_df" not in st.session_state:
     st.session_state["pois_df"] = None
 if "wilayah" not in st.session_state:
@@ -93,20 +78,37 @@ if "wilayah" not in st.session_state:
 if "kategori" not in st.session_state:
     st.session_state["kategori"] = None
 
-# Dropdown berjenjang
-provinsi = st.selectbox("Pilih Provinsi", [""] + get_provinces())
-kabupaten = ""
-kecamatan = ""
 
-if provinsi:
-    kabupaten = st.selectbox("Pilih Kabupaten/Kota", [""] + get_regencies(provinsi))
-if kabupaten:
-    kecamatan = st.selectbox("Pilih Kecamatan", [""] + get_districts(kabupaten))
+# ==============================
+# Dropdown berjenjang
+# ==============================
+prov_df = get_provinces()
+prov_name = st.selectbox("Pilih Provinsi", [""] + prov_df["nama"].tolist())
+kode_prov = prov_df.loc[prov_df["nama"] == prov_name, "kode"].values[0] if prov_name else ""
+
+kab_name, kec_name = "", ""
+
+if kode_prov:
+    kab_df = get_regencies(kode_prov)
+    kab_name = st.selectbox("Pilih Kabupaten/Kota", [""] + kab_df["nama"].tolist())
+    kode_kab = kab_df.loc[kab_df["nama"] == kab_name, "kode"].values[0] if kab_name else ""
+else:
+    kode_kab = ""
+
+if kode_kab:
+    kec_df = get_districts(kode_kab)
+    kec_name = st.selectbox("Pilih Kecamatan", [""] + kec_df["nama"].tolist())
+else:
+    kec_df = pd.DataFrame()
 
 kategori = st.selectbox("Kategori POI", kategori_list, index=0)
 
+
+# ==============================
+# Tombol Query
+# ==============================
 if st.button("🔍 Cari & Simpan Data"):
-    wilayah = kecamatan if kecamatan else (kabupaten if kabupaten else provinsi)
+    wilayah = kec_name if kec_name else (kab_name if kab_name else prov_name)
     if not wilayah:
         st.error("⚠️ Silakan pilih minimal Provinsi atau lebih spesifik (Kabupaten/Kota/Kecamatan).")
     else:
@@ -151,7 +153,10 @@ if st.button("🔍 Cari & Simpan Data"):
                 st.session_state["kategori"] = kategori
                 st.success(f"✅ Ditemukan {len(df)} POI di {wilayah}")
 
-# --- Render hasil tersimpan ---
+
+# ==============================
+# Render hasil
+# ==============================
 if st.session_state["pois_df"] is not None:
     df = st.session_state["pois_df"]
     wilayah = st.session_state["wilayah"]
@@ -163,7 +168,7 @@ if st.session_state["pois_df"] is not None:
 
     # 2. Peta
     st.subheader("🗺️ Peta POI")
-    m = folium.Map(location=[df["lat"].mean(), df["lon"].mean()], zoom_start=8)
+    m = folium.Map(location=[df["lat"].mean(), df["lon"].mean()], zoom_start=10)
     for _, row in df.iterrows():
         if pd.notna(row["lat"]) and pd.notna(row["lon"]):
             folium.Marker(
