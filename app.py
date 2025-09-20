@@ -5,7 +5,7 @@ import folium
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="POI Downloader", layout="wide")
-st.title("📍 POI Downloader dari OpenStreetMap (Gratis)")
+st.title("📍 POI Downloader dari OpenStreetMap")
 
 # Daftar kategori umum (amenity OSM)
 kategori_list = [
